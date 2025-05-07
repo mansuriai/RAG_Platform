@@ -1,1 +1,1 @@
-web: streamlit run automated_platform/app/platform_ui.py --server.port=$PORT --server.address=0.0.0.0
+web: streamlit run automated_platform/app/platform_ui.py --server.port $PORT --server.address 0.0.0.0
