@@ -1,0 +1,274 @@
+## platform_ui.py
+
+import streamlit as st
+import os
+import sys
+import time
+import uuid
+from pathlib import Path
+import json
+import subprocess
+import threading
+
+# Add parent directory to path
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# from app.instance_creator import InstanceCreator
+# from app.instance_manager import InstanceManager
+# from platform_core.config_manager import ConfigManager      ###
+# from platform_core.port_manager import PortManager          ##
+
+# Get the absolute path of the parent directory (automated_platform)
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Add it to sys.path if not already present
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
+
+# Now use direct imports (no 'app.' prefix since we added parent_dir to path)
+from app.instance_creator import InstanceCreator
+from app.instance_manager import InstanceManager
+from platform_core.config_manager import ConfigManager
+from platform_core.port_manager import PortManager
+
+# Initialize components
+instance_creator = InstanceCreator()
+instance_manager = InstanceManager()
+config_manager = ConfigManager()
+port_manager = PortManager()
+
+# Set page config
+st.set_page_config(
+    page_title="RAG Application Generator",
+    layout="wide"
+)
+
+# Initialize session state
+if "instance_id" not in st.session_state:
+    st.session_state.instance_id = None
+if "deployment_status" not in st.session_state:
+    st.session_state.deployment_status = ""
+if "uploaded_pdfs" not in st.session_state:
+    st.session_state.uploaded_pdfs = []
+if "urls" not in st.session_state:
+    st.session_state.urls = []
+
+def deploy_instance_async(instance_id, port):
+    """Deploy the instance in a separate thread"""
+    try:
+        instance_manager.start_instance(instance_id, port)
+        st.session_state.deployment_status = f"Deployed! Access your RAG application at: http://localhost:{port}"
+    except Exception as e:
+        st.session_state.deployment_status = f"Deployment failed: {str(e)}"
+
+def main():
+    st.title("RAG Application Generator")
+    st.write("Upload documents, configure your RAG application, and get a dedicated deployment.")
+    
+    with st.expander("About this Platform", expanded=False):
+        st.markdown("""
+        This platform allows you to generate your own RAG (Retrieval-Augmented Generation) chatbot without coding.
+        
+        Just follow these steps:
+        1. Upload PDF documents or add URLs to web pages
+        2. Configure your application (embedding model, LLM, etc.)
+        3. Generate your application
+        4. Get a dedicated URL to access your custom RAG chatbot
+        
+        All processing and storage are handled automatically, and you'll get a dedicated instance.
+        """)
+    
+    col1, col2 = st.columns(2)
+    
+    # Document upload section
+    with col1:
+        st.header("Upload Documents")
+        
+        # PDF Upload
+        pdf_files = st.file_uploader(
+            "Upload PDF documents",
+            type=['pdf'],
+            accept_multiple_files=True
+        )
+        
+        if pdf_files:
+            st.session_state.uploaded_pdfs = pdf_files
+            st.write(f"{len(pdf_files)} PDF documents ready for processing.")
+        
+        # URL Input
+        st.subheader("Add URLs")
+        url_input = st.text_area("Enter URLs (one per line) to index web content")
+        
+        if url_input:
+            urls = [url.strip() for url in url_input.split("\n") if url.strip()]
+            st.session_state.urls = urls
+            st.write(f"{len(urls)} URLs ready for processing.")
+    
+    # Configuration section
+    with col2:
+        st.header("Configure Your Application")
+        
+        # Application name input
+        app_name = st.text_input("Application Name", "My RAG App")
+        
+        # Model selection
+        embedding_model = st.selectbox(
+            "Embedding Model",
+            [
+                "sentence-transformers/all-mpnet-base-v2",
+                "sentence-transformers/all-MiniLM-L6-v2",
+                "BAAI/bge-small-en-v1.5",
+                "BAAI/bge-base-en-v1.5"
+            ]
+        )
+        
+        llm_model = st.selectbox(
+            "LLM Model",
+            [
+                "gpt-3.5-turbo",
+                "gpt-4",
+                "gpt-4-turbo",
+                "claude-3-opus-20240229",
+                "claude-3-sonnet-20240229"
+            ]
+        )
+        
+        # Vector store selection
+        vector_store = st.selectbox(
+            "Vector Store Platform",
+            [
+                "Pinecone",
+                "Chroma (Local)",
+                "FAISS (Local)"
+            ]
+        )
+        
+        # Advanced settings
+        with st.expander("Advanced Settings", expanded=False):
+            chunk_size = st.slider("Chunk Size", 500, 2000, 1000)
+            chunk_overlap = st.slider("Chunk Overlap", 0, 500, 200)
+            top_k = st.slider("Top K Results", 1, 10, 5)
+            
+            st.subheader("API Keys")
+            if llm_model.startswith("gpt"):
+                openai_api_key = st.text_input("OpenAI API Key", type="password")
+            elif llm_model.startswith("claude"):
+                anthropic_api_key = st.text_input("Anthropic API Key", type="password")
+            
+            if vector_store == "Pinecone":
+                pinecone_api_key = st.text_input("Pinecone API Key", type="password")
+                pinecone_environment = st.text_input("Pinecone Environment", "gcp-starter")
+    
+    # Generation section
+    st.header("Generate Your Application")
+    
+    if st.button("Generate and Deploy RAG Application"):
+        with st.spinner("Processing and deploying your RAG application..."):
+            # Validate inputs
+            if not st.session_state.uploaded_pdfs and not st.session_state.urls:
+                st.error("Please upload at least one PDF document or add at least one URL.")
+                return
+            
+            # Create unique instance ID
+            instance_id = str(uuid.uuid4())
+            st.session_state.instance_id = instance_id
+            
+            # Create instance configuration
+            config = {
+                "instance_id": instance_id,
+                "app_name": app_name,
+                "embedding_model": embedding_model,
+                "llm_model": llm_model,
+                "vector_store": vector_store,
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+                "top_k": top_k,
+                "created_at": time.time()
+            }
+            
+            # Add API keys to config
+            if llm_model.startswith("gpt") and 'openai_api_key' in locals():
+                config["openai_api_key"] = openai_api_key
+            elif llm_model.startswith("claude") and 'anthropic_api_key' in locals():
+                config["anthropic_api_key"] = anthropic_api_key
+            
+            if vector_store == "Pinecone" and 'pinecone_api_key' in locals():
+                config["pinecone_api_key"] = pinecone_api_key
+                config["pinecone_environment"] = pinecone_environment
+            
+            # Save configuration
+            config_manager.save_config(instance_id, config)
+            
+            # Process PDFs
+            pdf_paths = []
+            for pdf in st.session_state.uploaded_pdfs:
+                pdf_path = os.path.join(config_manager.get_instance_dir(instance_id), "pdfs", pdf.name)
+                os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
+                with open(pdf_path, 'wb') as f:
+                    f.write(pdf.getvalue())
+                pdf_paths.append(pdf_path)
+            
+            # Save URLs
+            if st.session_state.urls:
+                urls_file = os.path.join(config_manager.get_instance_dir(instance_id), "urls.txt")
+                with open(urls_file, 'w') as f:
+                    for url in st.session_state.urls:
+                        f.write(f"{url}\n")
+            
+            # Create the instance
+            instance_creator.create_instance(instance_id, config, pdf_paths, st.session_state.urls)
+            
+            # Find available port
+            port = port_manager.get_available_port()
+            
+            # Add port to config and update
+            config["port"] = port
+            config_manager.save_config(instance_id, config)
+            
+            # Start deployment in a background thread
+            threading.Thread(
+                target=deploy_instance_async,
+                args=(instance_id, port)
+            ).start()
+            
+            st.success(f"RAG application created with ID: {instance_id}")
+            st.info("Deploying your application... This may take a moment.")
+    
+    # Display deployment status
+    if st.session_state.deployment_status:
+        if "Deployed!" in st.session_state.deployment_status:
+            st.success(st.session_state.deployment_status)
+        else:
+            st.error(st.session_state.deployment_status)
+    
+    # Instance management section
+    st.header("Manage Your Instances")
+    
+    instances = instance_manager.list_instances()
+    if instances:
+        st.write(f"You have {len(instances)} active instances:")
+        
+        for instance in instances:
+            with st.expander(f"{instance['app_name']} ({instance['instance_id']})"):
+                st.write(f"**Status:** {'Running' if instance['running'] else 'Stopped'}")
+                st.write(f"**URL:** http://localhost:{instance['port']}")
+                st.write(f"**Created:** {time.ctime(instance['created_at'])}")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if instance['running']:
+                        if st.button(f"Stop {instance['app_name']}", key=f"stop_{instance['instance_id']}"):
+                            instance_manager.stop_instance(instance['instance_id'])
+                            st.rerun()
+                    else:
+                        if st.button(f"Start {instance['app_name']}", key=f"start_{instance['instance_id']}"):
+                            instance_manager.start_instance(instance['instance_id'], instance['port'])
+                            st.rerun()
+                
+                with col2:
+                    if st.button(f"Delete {instance['app_name']}", key=f"delete_{instance['instance_id']}"):
+                        instance_manager.delete_instance(instance['instance_id'])
+                        st.rerun()
+    else:
+        st.info("No instances found. Generate a new RAG application to get started!")
+
+if __name__ == "__main__":
+    main()
