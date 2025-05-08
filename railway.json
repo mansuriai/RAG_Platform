@@ -1,8 +1,31 @@
 {
     "build": {
       "builder": "nixpacks",
-      "config": {
-        "startCmd": "streamlit run automated_platform/app/platform_ui.py --server.port $PORT --server.address 0.0.0.0"
+      "nixpacksVersion": "1.17.0",
+      "nixpacksPlan": {
+        "phases": {
+          "setup": {
+            "nixpkgs": {
+              "python39": "3.9.18"
+            }
+          },
+          "install": {
+            "cmds": [
+              "pip install -r requirements.txt"
+            ]
+          },
+          "build": {
+            "cmds": [
+              "mkdir -p automated_platform/instances"
+            ]
+          }
+        }
       }
+    },
+    "deploy": {
+      "startCommand": "streamlit run automated_platform/app/platform_ui.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false",
+      "healthcheckPath": "/",
+      "healthcheckTimeout": 120,
+      "restartPolicyType": "on-failure"
     }
   }
